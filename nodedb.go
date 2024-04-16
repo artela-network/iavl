@@ -501,6 +501,16 @@ func (ndb *nodeDB) DeleteVersionsFrom(version int64) error {
 	return nil
 }
 
+type saveOrphan struct {
+	from, to int64
+}
+
+type deleteCache struct {
+}
+
+type deleteNode struct {
+}
+
 // DeleteVersionsRange deletes versions from an interval (not inclusive).
 func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 	if fromVersion >= toVersion {
@@ -534,28 +544,59 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 
 	// If the predecessor is earlier than the beginning of the lifetime, we can delete the orphan.
 	// Otherwise, we shorten its lifetime, by moving its endpoint to the predecessor version.
+	var operations sync.Map
+	delNode := &deleteNode{}
+	delCache := &deleteCache{}
+	var wg sync.WaitGroup
+	wg.Add(int(toVersion - fromVersion))
+
 	for version := fromVersion; version < toVersion; version++ {
-		err := ndb.traverseOrphansVersion(version, func(key, hash []byte) error {
-			var from, to int64
-			orphanKeyFormat.Scan(key, &to, &from)
-			if err := ndb.batch.Delete(key); err != nil {
-				return err
-			}
-			if from > predecessor {
-				if err := ndb.batch.Delete(ndb.nodeKey(hash)); err != nil {
-					return err
+		go func(version, predecessor int64) {
+			_ = ndb.traverseOrphansVersion(version, func(key, hash []byte) error {
+				var from, to int64
+				orphanKeyFormat.Scan(key, &to, &from)
+				operations.Store(key, delNode)
+				//if err := ndb.batch.Delete(key); err != nil {
+				//	return err
+				//}
+				if from > predecessor {
+					operations.Store(ndb.nodeKey(hash), delNode)
+					//if err := ndb.batch.Delete(ndb.nodeKey(hash)); err != nil {
+					//	return err
+					//}
+					//ndb.nodeCache.Remove(hash)
+					operations.Store(hash, delCache)
+				} else {
+					//if err := ndb.saveOrphan(hash, from, predecessor); err != nil {
+					//	return err
+					//}
+					operations.Store(hash, &saveOrphan{from, predecessor})
 				}
-				ndb.nodeCache.Remove(hash)
-			} else {
-				if err := ndb.saveOrphan(hash, from, predecessor); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return err
+				return nil
+			})
+
+			wg.Done()
+		}(version, predecessor)
+	}
+
+	wg.Wait()
+
+	var operationErr error
+	operations.Range(func(key, value interface{}) bool {
+		switch v := value.(type) {
+		case *deleteNode:
+			operationErr = ndb.batch.Delete(key.([]byte))
+		case *deleteCache:
+			ndb.nodeCache.Remove(key.([]byte))
+		case *saveOrphan:
+			orphan := v
+			operationErr = ndb.saveOrphan(key.([]byte), orphan.from, orphan.to)
 		}
+		return operationErr == nil
+	})
+
+	if operationErr != nil {
+		return operationErr
 	}
 
 	// Delete the version root entries
