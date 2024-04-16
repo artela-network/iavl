@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	dbm "github.com/cometbft/cometbft-db"
 
@@ -513,6 +514,11 @@ type deleteNode struct {
 
 // DeleteVersionsRange deletes versions from an interval (not inclusive).
 func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
+	total := time.Now()
+	defer func() {
+		d := float64(time.Since(total).Microseconds()) / 1000
+		fmt.Printf("____________________DeleteVersionsRange, total cost: %.3f\n", d)
+	}()
 	if fromVersion >= toVersion {
 		return errors.New("toVersion must be greater than fromVersion")
 	}
@@ -520,9 +526,12 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 		return errors.New("toVersion must be greater than 0")
 	}
 
+	t := time.Now()
 	ndb.mtx.Lock()
 	defer ndb.mtx.Unlock()
+	fmt.Printf("_________________________DeleteVersionsRange, lock cost: %.3f\n", float64(time.Since(t).Microseconds())/1000)
 
+	t = time.Now()
 	latest, err := ndb.getLatestVersion()
 	if err != nil {
 		return err
@@ -541,7 +550,9 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 			return fmt.Errorf("unable to delete version %v with %v active readers", v, r)
 		}
 	}
+	fmt.Printf("_________________________DeleteVersionsRange, prepare version cost: %.3f\n", float64(time.Since(t).Microseconds())/1000)
 
+	t = time.Now()
 	// If the predecessor is earlier than the beginning of the lifetime, we can delete the orphan.
 	// Otherwise, we shorten its lifetime, by moving its endpoint to the predecessor version.
 	var operations sync.Map
@@ -578,9 +589,13 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 			wg.Done()
 		}(version, predecessor)
 	}
+	fmt.Printf("_________________________DeleteVersionsRange, set traverseOrphansVersion cost: %.3f\n", float64(time.Since(t).Microseconds())/1000)
 
+	t = time.Now()
 	wg.Wait()
+	fmt.Printf("_________________________DeleteVersionsRange, wait traverseOrphansVersion cost: %.3f\n", float64(time.Since(t).Microseconds())/1000)
 
+	t = time.Now()
 	var operationErr error
 	operations.Range(func(key, value interface{}) bool {
 		keyBytes := ibytes.UnsafeStrToBytes(key.(string))
@@ -607,6 +622,7 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 		}
 		return nil
 	})
+	fmt.Printf("_________________________DeleteVersionsRange, delete root cost: %.3f\n", float64(time.Since(t).Microseconds())/1000)
 
 	if err != nil {
 		return err
