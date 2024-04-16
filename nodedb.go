@@ -555,22 +555,22 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 			_ = ndb.traverseOrphansVersion(version, func(key, hash []byte) error {
 				var from, to int64
 				orphanKeyFormat.Scan(key, &to, &from)
-				operations.Store(key, delNode)
+				operations.Store(ibytes.UnsafeBytesToStr(key), delNode)
 				//if err := ndb.batch.Delete(key); err != nil {
 				//	return err
 				//}
 				if from > predecessor {
-					operations.Store(ndb.nodeKey(hash), delNode)
+					operations.Store(ibytes.UnsafeBytesToStr(ndb.nodeKey(hash)), delNode)
 					//if err := ndb.batch.Delete(ndb.nodeKey(hash)); err != nil {
 					//	return err
 					//}
 					//ndb.nodeCache.Remove(hash)
-					operations.Store(hash, delCache)
+					operations.Store(ibytes.UnsafeBytesToStr(hash), delCache)
 				} else {
 					//if err := ndb.saveOrphan(hash, from, predecessor); err != nil {
 					//	return err
 					//}
-					operations.Store(hash, &saveOrphan{from, predecessor})
+					operations.Store(ibytes.UnsafeBytesToStr(hash), &saveOrphan{from, predecessor})
 				}
 				return nil
 			})
@@ -583,14 +583,15 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 
 	var operationErr error
 	operations.Range(func(key, value interface{}) bool {
+		keyBytes := ibytes.UnsafeStrToBytes(key.(string))
 		switch v := value.(type) {
 		case *deleteNode:
-			operationErr = ndb.batch.Delete(key.([]byte))
+			operationErr = ndb.batch.Delete(keyBytes)
 		case *deleteCache:
-			ndb.nodeCache.Remove(key.([]byte))
+			ndb.nodeCache.Remove(keyBytes)
 		case *saveOrphan:
 			orphan := v
-			operationErr = ndb.saveOrphan(key.([]byte), orphan.from, orphan.to)
+			operationErr = ndb.saveOrphan(keyBytes, orphan.from, orphan.to)
 		}
 		return operationErr == nil
 	})
