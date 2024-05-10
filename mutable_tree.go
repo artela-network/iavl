@@ -40,7 +40,7 @@ type MutableTree struct {
 	ndb                      *nodeDB
 	skipFastStorageUpgrade   bool // If true, the tree will work like no fast storage and always not upgrade fast storage
 
-	mtx sync.Mutex
+	mtx sync.RWMutex
 }
 
 // NewMutableTree returns a new tree with the specified cache size and datastore.
