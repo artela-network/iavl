@@ -365,17 +365,13 @@ func (ndb *nodeDB) deleteVersion(version int64) error {
 		return err
 	}
 
-	// t := time.Now()
 	count := 0
 	orphans, ok := ndb.cachedOrphans[version]
 	if !ok || orphans == nil {
-		// fmt.Printf("___________________________________cachedOrphans, version: %d not found\n", version)
 		if err := ndb.loadOrphans(version); err != nil {
 			return err
 		}
 		orphans = ndb.cachedOrphans[version]
-	} else {
-		// fmt.Printf("___________________________________cachedOrphans, version: %d found\n", version)
 	}
 	delete(ndb.cachedOrphans, version)
 
@@ -404,8 +400,6 @@ func (ndb *nodeDB) deleteVersion(version int64) error {
 			return err
 		}
 	}
-	// fmt.Printf("___________________________________traverseOrphans, version: %d, count: %d, duration: %.2fms\n",
-	// 	version, count, float64(time.Since(t).Microseconds())/1000)
 
 	literalRootKey := GetRootKey(version)
 	if rootKey == nil || !bytes.Equal(rootKey, literalRootKey) {
@@ -624,14 +618,10 @@ func (ndb *nodeDB) DeleteVersionsTo(toVersion int64) error {
 		ndb.cacheOrphansCacel()
 	}
 
-	// fmt.Printf("______________________________delete version, from %d, to %d\n", first, toVersion)
 	for version := first; version <= toVersion; version++ {
-		// t1 := time.Now()
 		if err := ndb.deleteVersion(version); err != nil {
 			return err
 		}
-		// fmt.Printf("______________________________ndb.deleteVersion, version: %d, duration: %.2fms\n",
-		// 	version, float64(time.Since(t1).Microseconds())/1000)
 		ndb.resetFirstVersion(version + 1)
 	}
 
@@ -648,10 +638,6 @@ func (ndb *nodeDB) DeleteVersionsTo(toVersion int64) error {
 		nend = nstart + 500
 	}
 
-	// for version := nstart; version <= nend; version++ {
-	// 	// fmt.Printf("___________________________________loadOrphans, version: %d\n", i)
-	// 	ndb.loadOrphans(version)
-	// }
 	go ndb.loadOrphansRange(ctx, nstart, nend)
 
 	return nil
@@ -664,7 +650,6 @@ func (ndb *nodeDB) loadOrphansRange(ctx context.Context, fromVersion, toVersion 
 			return
 		default:
 			time.Sleep(10 * time.Millisecond)
-			// fmt.Printf("______________________________load version, from %d, to %d\n", nstart, nend)
 			ndb.loadOrphans(version)
 		}
 	}
