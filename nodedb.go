@@ -94,8 +94,8 @@ type nodeDB struct {
 	nodeCache           cache.Cache      // Cache for nodes in the regular tree that consists of key-value pairs at any version.
 	fastNodeCache       cache.Cache      // Cache for nodes in the fast index that represents only key-value pairs at the latest version.
 
-	cachedOrphans     map[int64][]Node   // cached orphans to be deleted
-	cacheOrphansCacel context.CancelFunc // to notify the load work canceled
+	cachedOrphans      map[int64][]Node   // cached orphans to be deleted
+	cacheOrphansCancel context.CancelFunc // to notify the load work canceled
 }
 
 func newNodeDB(db dbm.DB, cacheSize int, opts Options, lg log.Logger) *nodeDB {
@@ -614,8 +614,8 @@ func (ndb *nodeDB) DeleteVersionsTo(toVersion int64) error {
 	}
 
 	// notify stop the loading works
-	if ndb.cacheOrphansCacel != nil {
-		ndb.cacheOrphansCacel()
+	if ndb.cacheOrphansCancel != nil {
+		ndb.cacheOrphansCancel()
 	}
 
 	for version := first; version <= toVersion; version++ {
@@ -626,7 +626,7 @@ func (ndb *nodeDB) DeleteVersionsTo(toVersion int64) error {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	ndb.cacheOrphansCacel = cancel
+	ndb.cacheOrphansCancel = cancel
 	// clear the cached orphans
 	ndb.cachedOrphans = make(map[int64][]Node)
 
