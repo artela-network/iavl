@@ -94,6 +94,11 @@ type (
 
 		cachedOrphans      map[int64][]keyHashPair // cached orphans to be deleted
 		cacheOrphansCancel context.CancelFunc      // to notify the load work canceled
+
+		// cachedDeleteOrphans   []keyHashPair
+		// cachedDeleteOrphansWg sync.WaitGroup
+		// cachedSaveOrphans     []keyHashPair
+		// cachedSaveOrphansWg   sync.WaitGroup
 	}
 )
 
@@ -120,6 +125,8 @@ func newNodeDB(db dbm.DB, cacheSize int, opts *Options) *nodeDB {
 		storageVersion: string(storeVersion),
 
 		cachedOrphans: make(map[int64][]keyHashPair),
+		// cachedDeleteOrphans: make([]keyHashPair, 0),
+		// cachedSaveOrphans:   make([]keyHashPair, 0),
 	}
 }
 
@@ -595,7 +602,7 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 			totalDelete += int64(time.Since(t1d).Nanoseconds())
 		}
 	}
-	fmt.Printf("_______________DeleteOrphans, orphans: %d, delete duration %.2f, duartion: %.2fms\n",
+	fmt.Printf("________________________DeleteOrphans, orphans: %d, delete duration %.2f, duartion: %.2fms\n",
 		totalOrphans, float64(totalDelete)/1000000, float64(time.Since(t1).Microseconds())/1000)
 
 	t2 := time.Now()
@@ -611,7 +618,7 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 		totalRootDelete += int64(time.Since(tRoot).Nanoseconds())
 		return nil
 	})
-	fmt.Printf("_______________traverseRange, from %d, to %d, totalDelete: %.2f, duartion: %.2fms\n",
+	fmt.Printf("________________________traverseRange, from %d, to %d, totalDelete: %.2f, duartion: %.2fms\n",
 		fromVersion, toVersion, float64(totalRootDelete)/1000000, float64(time.Since(t2).Microseconds())/1000)
 
 	if err != nil {
@@ -633,10 +640,12 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 
 	go ndb.loadOrphansRange(ctx, nstart, nend)
 
-	fmt.Printf("__________DeleteVersionsRange, from %d, to %d, missed %d, hit %d, duartion: %.2fms\n",
+	fmt.Printf("___________________DeleteVersionsRange, from %d, to %d, missed %d, hit %d, duartion: %.2fms\n",
 		fromVersion, toVersion, miss, hit, float64(time.Since(t).Microseconds())/1000)
 	return nil
 }
+
+// func (ndb *nodeDB) deleteOrphansBackground()
 
 func (ndb *nodeDB) loadOrphansRange(ctx context.Context, fromVersion, toVersion int64) {
 	for version := fromVersion; version <= toVersion; version++ {
