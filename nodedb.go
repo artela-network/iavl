@@ -625,18 +625,18 @@ func (ndb *nodeDB) DeleteVersionsTo(toVersion int64) error {
 		ndb.resetFirstVersion(version + 1)
 	}
 
+	if toVersion-first > maxCachedOrphans {
+		return nil
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	ndb.cacheOrphansCancel = cancel
 	// clear the cached orphans
 	ndb.cachedOrphans = make(map[int64][]Node)
 
 	// predict next deletion, load node in background
-	nstart := toVersion + 1
+	nstart := toVersion
 	nend := nstart + toVersion - first
-	if maxCachedOrphans < nend-nstart {
-		// limit the max to 500
-		nend = nstart + 500
-	}
 
 	go ndb.loadOrphansRange(ctx, nstart, nend)
 
