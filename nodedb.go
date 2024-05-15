@@ -94,11 +94,6 @@ type (
 
 		cachedOrphans      map[int64][]keyHashPair // cached orphans to be deleted
 		cacheOrphansCancel context.CancelFunc      // to notify the load work canceled
-
-		// cachedDeleteOrphans   []keyHashPair
-		// cachedDeleteOrphansWg sync.WaitGroup
-		// cachedSaveOrphans     []keyHashPair
-		// cachedSaveOrphansWg   sync.WaitGroup
 	}
 )
 
@@ -125,8 +120,6 @@ func newNodeDB(db dbm.DB, cacheSize int, opts *Options) *nodeDB {
 		storageVersion: string(storeVersion),
 
 		cachedOrphans: make(map[int64][]keyHashPair),
-		// cachedDeleteOrphans: make([]keyHashPair, 0),
-		// cachedSaveOrphans:   make([]keyHashPair, 0),
 	}
 }
 
@@ -625,6 +618,10 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 		return err
 	}
 
+	if toVersion-fromVersion > maxCachedOrphans {
+		return nil
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	ndb.cacheOrphansCancel = cancel
 	// clear the cached orphans
@@ -633,11 +630,8 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 	// predict next deletion, load node in background
 	nstart := toVersion
 	nend := nstart + toVersion - fromVersion
-	if maxCachedOrphans < nend-nstart {
-		// limit the max to 500
-		nend = nstart + 500
-	}
 
+	logger.Debug("loading orphnas, fromVersion %d, toVersion %d", nstart, toVersion)
 	go ndb.loadOrphansRange(ctx, nstart, nend)
 
 	fmt.Printf("___________________DeleteVersionsRange, from %d, to %d, missed %d, hit %d, duartion: %.2fms\n",
