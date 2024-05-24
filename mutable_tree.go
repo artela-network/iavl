@@ -72,6 +72,10 @@ func (tree *MutableTree) IsEmpty() bool {
 	return tree.ImmutableTree.Size() == 0
 }
 
+func (tree *MutableTree) Compaction() {
+	tree.ndb.db.Compaction()
+}
+
 // VersionExists returns whether or not a version exists.
 func (tree *MutableTree) VersionExists(version int64) bool {
 	legacyLatestVersion, err := tree.ndb.getLegacyLatestVersion()

@@ -34,6 +34,10 @@ func (db *Wrapper) NewBatchWithSize(size int) Batch {
 	return db.DB.NewBatchWithSize(size)
 }
 
+func (db *Wrapper) Compaction() {
+	db.DB.Compaction()
+}
+
 // NewDB returns a new Wrapper.
 func NewDB(name, backendType, dir string) (*Wrapper, error) {
 	db, err := dbm.NewDB(name, dbm.BackendType(backendType), dir)

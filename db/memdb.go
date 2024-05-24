@@ -208,6 +208,9 @@ func (db *MemDB) ReverseIteratorNoMtx(start, end []byte) (Iterator, error) {
 	return newMemDBIteratorMtxChoice(db, start, end, true, false), nil
 }
 
+func (db *MemDB) Compaction() {
+}
+
 const (
 	// Size of the channel buffer between traversal goroutine and iterator. Using an unbuffered
 	// channel causes two context switches per item sent, while buffering allows more work per

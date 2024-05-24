@@ -52,6 +52,8 @@ type DB interface {
 	// NewBatchWithSize create a new batch for atomic updates, but with pre-allocated size.
 	// This will does the same thing as NewBatch if the batch implementation doesn't support pre-allocation.
 	NewBatchWithSize(int) Batch
+
+	Compaction()
 }
 
 // Iterator represents an iterator over a domain of keys. Callers must call Close when done.
