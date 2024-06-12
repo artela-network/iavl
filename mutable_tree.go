@@ -44,13 +44,18 @@ type MutableTree struct {
 }
 
 // NewMutableTree returns a new tree with the specified cache size and datastore.
-func NewMutableTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, name string) (*MutableTree, error) {
-	return NewMutableTreeWithOpts(db, cacheSize, nil, skipFastStorageUpgrade, name)
+func NewMutableTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool) (*MutableTree, error) {
+	return NewMutableTreeWithOpts(db, cacheSize, nil, skipFastStorageUpgrade, "")
+}
+
+// NewMutableTree returns a new tree with the specified cache size and datastore.
+func NewMutableTreeWithMoniker(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, moniker string) (*MutableTree, error) {
+	return NewMutableTreeWithOpts(db, cacheSize, nil, skipFastStorageUpgrade, moniker)
 }
 
 // NewMutableTreeWithOpts returns a new tree with the specified options.
-func NewMutableTreeWithOpts(db dbm.DB, cacheSize int, opts *Options, skipFastStorageUpgrade bool, name string) (*MutableTree, error) {
-	ndb := newNodeDB(db, cacheSize, opts, name)
+func NewMutableTreeWithOpts(db dbm.DB, cacheSize int, opts *Options, skipFastStorageUpgrade bool, moniker string) (*MutableTree, error) {
+	ndb := newNodeDB(db, cacheSize, opts, moniker)
 	head := &ImmutableTree{ndb: ndb, skipFastStorageUpgrade: skipFastStorageUpgrade}
 
 	return &MutableTree{

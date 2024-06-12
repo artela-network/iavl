@@ -82,7 +82,7 @@ type (
 	}
 
 	nodeDB struct {
-		storeName      string
+		moniker        string
 		mtx            sync.Mutex       // Read/write lock.
 		db             dbm.DB           // Persistent node storage.
 		batch          dbm.Batch        // Batched writing buffer.
@@ -98,7 +98,7 @@ type (
 	}
 )
 
-func newNodeDB(db dbm.DB, cacheSize int, opts *Options, name string) *nodeDB {
+func newNodeDB(db dbm.DB, cacheSize int, opts *Options, moniker string) *nodeDB {
 	if opts == nil {
 		o := DefaultOptions()
 		opts = &o
@@ -121,7 +121,7 @@ func newNodeDB(db dbm.DB, cacheSize int, opts *Options, name string) *nodeDB {
 		storageVersion: string(storeVersion),
 
 		cachedOrphans: sync.Map{},
-		storeName:     name,
+		moniker:       moniker,
 	}
 }
 
@@ -604,8 +604,8 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 			totalDelete += int64(time.Since(t1d).Nanoseconds())
 		}
 	}
-	fmt.Printf("________________________DeleteOrphans, name: %s, orphans: %d, delete duration %.2f, duartion: %.2fms\n",
-		ndb.storeName, totalOrphans, float64(totalDelete)/1000000, float64(time.Since(t1).Microseconds())/1000)
+	logger.Debug(fmt.Sprintf("DeleteOrphans, name: %s, orphans: %d, delete duration %.2f, duartion: %.2fms\n",
+		ndb.moniker, totalOrphans, float64(totalDelete)/1000000, float64(time.Since(t1).Microseconds())/1000))
 
 	t2 := time.Now()
 	// Delete the version root entries
@@ -620,8 +620,8 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 		totalRootDelete += int64(time.Since(tRoot).Nanoseconds())
 		return nil
 	})
-	fmt.Printf("________________________traverseRange, name: %s, from %d, to %d, totalDelete: %.2f, duartion: %.2fms\n",
-		ndb.storeName, fromVersion, toVersion, float64(totalRootDelete)/1000000, float64(time.Since(t2).Microseconds())/1000)
+	logger.Debug(fmt.Sprintf("traverseRange, name: %s, from %d, to %d, totalDelete: %.2f, duartion: %.2fms\n",
+		ndb.moniker, fromVersion, toVersion, float64(totalRootDelete)/1000000, float64(time.Since(t2).Microseconds())/1000))
 
 	if err != nil {
 		return err
@@ -647,17 +647,17 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 	logger.Debug("loading orphnas, fromVersion %d, toVersion %d", nstart, toVersion)
 	go ndb.loadOrphansRange(ctx, nstart, nend)
 
-	fmt.Printf("___________________DeleteVersionsRange, name: %s, from %d, to %d, missed %d-%d, hit %d-%d, duartion: %.2fms\n",
-		ndb.storeName, fromVersion, toVersion, miss, missKeysCount, hit, hitKeysCount, float64(time.Since(t).Microseconds())/1000)
+	logger.Debug(fmt.Sprintf("DeleteVersionsRange, name: %s, from %d, to %d, missed %d-%d, hit %d-%d, duartion: %.2fms\n",
+		ndb.moniker, fromVersion, toVersion, miss, missKeysCount, hit, hitKeysCount, float64(time.Since(t).Microseconds())/1000))
 	return nil
 }
 
 // func (ndb *nodeDB) deleteOrphansBackground()
 
 func (ndb *nodeDB) loadOrphansRange(ctx context.Context, fromVersion, toVersion int64) {
-	fmt.Printf("________________________loadOrphansRange start, name: %s, from %d, to %d\n", ndb.storeName, fromVersion, toVersion)
+	logger.Debug(fmt.Sprintf("loadOrphansRange start, name: %s, from %d, to %d\n", ndb.moniker, fromVersion, toVersion))
 	defer func() {
-		fmt.Printf("________________________loadOrphansRange end, name: %s, from %d, to %d\n", ndb.storeName, fromVersion, toVersion)
+		logger.Debug(fmt.Sprintf("loadOrphansRange end, name: %s, from %d, to %d\n", ndb.moniker, fromVersion, toVersion))
 	}()
 	for version := fromVersion; version <= toVersion; version++ {
 		select {
