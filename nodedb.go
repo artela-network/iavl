@@ -120,8 +120,7 @@ func newNodeDB(db dbm.DB, cacheSize int, opts *Options, moniker string) *nodeDB 
 		versionReaders: make(map[int64]uint32, 8),
 		storageVersion: string(storeVersion),
 
-		cachedOrphans: sync.Map{},
-		moniker:       moniker,
+		moniker: moniker,
 	}
 }
 
