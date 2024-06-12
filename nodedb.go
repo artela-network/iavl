@@ -82,6 +82,7 @@ type (
 	}
 
 	nodeDB struct {
+		storeName      string
 		mtx            sync.Mutex       // Read/write lock.
 		db             dbm.DB           // Persistent node storage.
 		batch          dbm.Batch        // Batched writing buffer.
@@ -92,12 +93,12 @@ type (
 		nodeCache      cache.Cache      // Cache for nodes in the regular tree that consists of key-value pairs at any version.
 		fastNodeCache  cache.Cache      // Cache for nodes in the fast index that represents only key-value pairs at the latest version.
 
-		cachedOrphans      map[int64][]keyHashPair // cached orphans to be deleted
-		cacheOrphansCancel context.CancelFunc      // to notify the load work canceled
+		cachedOrphans      sync.Map           // map[int64][]keyHashPair, cached orphans to be deleted
+		cacheOrphansCancel context.CancelFunc // to notify the load work canceled
 	}
 )
 
-func newNodeDB(db dbm.DB, cacheSize int, opts *Options) *nodeDB {
+func newNodeDB(db dbm.DB, cacheSize int, opts *Options, name string) *nodeDB {
 	if opts == nil {
 		o := DefaultOptions()
 		opts = &o
@@ -119,7 +120,8 @@ func newNodeDB(db dbm.DB, cacheSize int, opts *Options) *nodeDB {
 		versionReaders: make(map[int64]uint32, 8),
 		storageVersion: string(storeVersion),
 
-		cachedOrphans: make(map[int64][]keyHashPair),
+		cachedOrphans: sync.Map{},
+		storeName:     name,
 	}
 }
 
@@ -556,6 +558,8 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 
 	miss := 0
 	hit := 0
+	hitKeysCount := 0
+	missKeysCount := 0
 
 	t1 := time.Now()
 	totalOrphans := 0
@@ -563,19 +567,24 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 	// If the predecessor is earlier than the beginning of the lifetime, we can delete the orphan.
 	// Otherwise, we shorten its lifetime, by moving its endpoint to the predecessor version.
 	for version := fromVersion; version < toVersion; version++ {
-		orphans, ok := ndb.cachedOrphans[version]
+		orphans, ok := ndb.cachedOrphans.Load(version)
 		if !ok {
 			if err := ndb.loadOrphans(version); err != nil {
 				return err
 			}
-			orphans = ndb.cachedOrphans[version]
+			orphans, ok = ndb.cachedOrphans.Load(version)
+			if !ok {
+				return fmt.Errorf("failed to load orphans for version %d", version)
+			}
 			miss++
+			missKeysCount += len(orphans.([]keyHashPair))
 		} else {
 			hit++
+			hitKeysCount += len(orphans.([]keyHashPair))
 		}
 
-		totalOrphans += len(orphans)
-		for _, pair := range orphans {
+		totalOrphans += len(orphans.([]keyHashPair))
+		for _, pair := range orphans.([]keyHashPair) {
 			var from, to int64
 			t1d := time.Now()
 			orphanKeyFormat.Scan(pair.key, &to, &from)
@@ -595,8 +604,8 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 			totalDelete += int64(time.Since(t1d).Nanoseconds())
 		}
 	}
-	fmt.Printf("________________________DeleteOrphans, orphans: %d, delete duration %.2f, duartion: %.2fms\n",
-		totalOrphans, float64(totalDelete)/1000000, float64(time.Since(t1).Microseconds())/1000)
+	fmt.Printf("________________________DeleteOrphans, name: %s, orphans: %d, delete duration %.2f, duartion: %.2fms\n",
+		ndb.storeName, totalOrphans, float64(totalDelete)/1000000, float64(time.Since(t1).Microseconds())/1000)
 
 	t2 := time.Now()
 	// Delete the version root entries
@@ -611,8 +620,8 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 		totalRootDelete += int64(time.Since(tRoot).Nanoseconds())
 		return nil
 	})
-	fmt.Printf("________________________traverseRange, from %d, to %d, totalDelete: %.2f, duartion: %.2fms\n",
-		fromVersion, toVersion, float64(totalRootDelete)/1000000, float64(time.Since(t2).Microseconds())/1000)
+	fmt.Printf("________________________traverseRange, name: %s, from %d, to %d, totalDelete: %.2f, duartion: %.2fms\n",
+		ndb.storeName, fromVersion, toVersion, float64(totalRootDelete)/1000000, float64(time.Since(t2).Microseconds())/1000)
 
 	if err != nil {
 		return err
@@ -623,9 +632,13 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	// when setting the new cancel, ensure the preivous background work is stopped
+	if ndb.cacheOrphansCancel != nil {
+		ndb.cacheOrphansCancel()
+	}
 	ndb.cacheOrphansCancel = cancel
 	// clear the cached orphans
-	ndb.cachedOrphans = make(map[int64][]keyHashPair)
+	ndb.cachedOrphans = sync.Map{}
 
 	// predict next deletion, load node in background
 	nstart := toVersion
@@ -634,20 +647,24 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 	logger.Debug("loading orphnas, fromVersion %d, toVersion %d", nstart, toVersion)
 	go ndb.loadOrphansRange(ctx, nstart, nend)
 
-	fmt.Printf("___________________DeleteVersionsRange, from %d, to %d, missed %d, hit %d, duartion: %.2fms\n",
-		fromVersion, toVersion, miss, hit, float64(time.Since(t).Microseconds())/1000)
+	fmt.Printf("___________________DeleteVersionsRange, name: %s, from %d, to %d, missed %d-%d, hit %d-%d, duartion: %.2fms\n",
+		ndb.storeName, fromVersion, toVersion, miss, missKeysCount, hit, hitKeysCount, float64(time.Since(t).Microseconds())/1000)
 	return nil
 }
 
 // func (ndb *nodeDB) deleteOrphansBackground()
 
 func (ndb *nodeDB) loadOrphansRange(ctx context.Context, fromVersion, toVersion int64) {
+	fmt.Printf("________________________loadOrphansRange start, name: %s, from %d, to %d\n", ndb.storeName, fromVersion, toVersion)
+	defer func() {
+		fmt.Printf("________________________loadOrphansRange end, name: %s, from %d, to %d\n", ndb.storeName, fromVersion, toVersion)
+	}()
 	for version := fromVersion; version <= toVersion; version++ {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			time.Sleep(1 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 			ndb.loadOrphans(version)
 		}
 	}
@@ -737,7 +754,7 @@ func (ndb *nodeDB) saveOrphan(hash []byte, fromVersion, toVersion int64) error {
 }
 
 func (ndb *nodeDB) loadOrphans(version int64) error {
-	if _, ok := ndb.cachedOrphans[version]; ok {
+	if _, ok := ndb.cachedOrphans.Load(version); ok {
 		return nil
 	}
 
@@ -750,7 +767,7 @@ func (ndb *nodeDB) loadOrphans(version int64) error {
 	}
 
 	// store the orphans to cache only when all orphans are found.
-	ndb.cachedOrphans[version] = orphans
+	ndb.cachedOrphans.Store(version, orphans)
 	return nil
 }
 
@@ -763,15 +780,18 @@ func (ndb *nodeDB) deleteOrphans(version int64) error {
 		return err
 	}
 
-	orphans, ok := ndb.cachedOrphans[version]
+	orphans, ok := ndb.cachedOrphans.Load(version)
 	if !ok {
 		if err := ndb.loadOrphans(version); err != nil {
 			return err
 		}
-		orphans = ndb.cachedOrphans[version]
+		orphans, ok = ndb.cachedOrphans.Load(version)
+		if !ok {
+			return fmt.Errorf("failed to load orphans for version %d", version)
+		}
 	}
 
-	for _, pair := range orphans {
+	for _, pair := range orphans.([]keyHashPair) {
 		var fromVersion, toVersion int64
 
 		// See comment on `orphanKeyFmt`. Note that here, `version` and

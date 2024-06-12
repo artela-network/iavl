@@ -21,23 +21,23 @@ type ImmutableTree struct {
 }
 
 // NewImmutableTree creates both in-memory and persistent instances
-func NewImmutableTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool) *ImmutableTree {
+func NewImmutableTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, name string) *ImmutableTree {
 	if db == nil {
 		// In-memory Tree.
 		return &ImmutableTree{}
 	}
 	return &ImmutableTree{
 		// NodeDB-backed Tree.
-		ndb:                    newNodeDB(db, cacheSize, nil),
+		ndb:                    newNodeDB(db, cacheSize, nil, name),
 		skipFastStorageUpgrade: skipFastStorageUpgrade,
 	}
 }
 
 // NewImmutableTreeWithOpts creates an ImmutableTree with the given options.
-func NewImmutableTreeWithOpts(db dbm.DB, cacheSize int, opts *Options, skipFastStorageUpgrade bool) *ImmutableTree {
+func NewImmutableTreeWithOpts(db dbm.DB, cacheSize int, opts *Options, skipFastStorageUpgrade bool, name string) *ImmutableTree {
 	return &ImmutableTree{
 		// NodeDB-backed Tree.
-		ndb:                    newNodeDB(db, cacheSize, opts),
+		ndb:                    newNodeDB(db, cacheSize, opts, name),
 		skipFastStorageUpgrade: skipFastStorageUpgrade,
 	}
 }
