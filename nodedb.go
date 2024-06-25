@@ -94,7 +94,7 @@ type nodeDB struct {
 	nodeCache           cache.Cache      // Cache for nodes in the regular tree that consists of key-value pairs at any version.
 	fastNodeCache       cache.Cache      // Cache for nodes in the fast index that represents only key-value pairs at the latest version.
 
-	cachedOrphans      map[int64][]Node   // cached orphans to be deleted
+	cachedOrphans      sync.Map // map[int64][]Node, cached orphans to be deleted
 	cacheOrphansCancel context.CancelFunc // to notify the load work canceled
 }
 
@@ -117,8 +117,6 @@ func newNodeDB(db dbm.DB, cacheSize int, opts Options, lg log.Logger) *nodeDB {
 		fastNodeCache:       cache.New(fastNodeCacheSize),
 		versionReaders:      make(map[int64]uint32, 8),
 		storageVersion:      string(storeVersion),
-
-		cachedOrphans: make(map[int64][]Node),
 	}
 }
 
@@ -340,7 +338,7 @@ func (ndb *nodeDB) Has(nk []byte) (bool, error) {
 }
 
 func (ndb *nodeDB) loadOrphans(version int64) error {
-	if _, ok := ndb.cachedOrphans[version]; ok {
+	if _, ok := ndb.cachedOrphans.Load(version); ok {
 		return nil
 	}
 
@@ -353,7 +351,7 @@ func (ndb *nodeDB) loadOrphans(version int64) error {
 	}
 
 	// store the orphans to cache only when all orphans are found.
-	ndb.cachedOrphans[version] = orphans
+	ndb.cachedOrphans.Store(version, orphans);
 	return nil
 }
 
@@ -366,16 +364,16 @@ func (ndb *nodeDB) deleteVersion(version int64) error {
 	}
 
 	count := 0
-	orphans, ok := ndb.cachedOrphans[version]
+	orphans, ok := ndb.cachedOrphans.Load(version)
 	if !ok || orphans == nil {
 		if err := ndb.loadOrphans(version); err != nil {
 			return err
 		}
-		orphans = ndb.cachedOrphans[version]
+		orphans, _ = ndb.cachedOrphans.Load(version)
 	}
-	delete(ndb.cachedOrphans, version)
+	ndb.cachedOrphans.Delete(version)
 
-	for _, orphan := range orphans {
+	for _, orphan := range orphans.([]Node) {
 		count++
 		if orphan.nodeKey.nonce == 0 && !orphan.isLegacy {
 			// if the orphan is a reformatted root, it can be a legacy root
@@ -630,9 +628,12 @@ func (ndb *nodeDB) DeleteVersionsTo(toVersion int64) error {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	if ndb.cacheOrphansCancel != nil {
+		ndb.cacheOrphansCancel()
+	}
 	ndb.cacheOrphansCancel = cancel
 	// clear the cached orphans
-	ndb.cachedOrphans = make(map[int64][]Node)
+	ndb.cachedOrphans = sync.Map{}
 
 	// predict next deletion, load node in background
 	nstart := toVersion
