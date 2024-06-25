@@ -2,6 +2,7 @@ package iavl
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -41,6 +42,8 @@ const (
 	// This is used to avoid the case which pruning blocks the main process.
 	deleteBatchCount    = 1000
 	deletePauseDuration = 100 * time.Millisecond
+
+	maxCachedOrphans = 500
 )
 
 var (
@@ -90,6 +93,9 @@ type nodeDB struct {
 	legacyLatestVersion int64            // Latest version of nodeDB in legacy format.
 	nodeCache           cache.Cache      // Cache for nodes in the regular tree that consists of key-value pairs at any version.
 	fastNodeCache       cache.Cache      // Cache for nodes in the fast index that represents only key-value pairs at the latest version.
+
+	cachedOrphans      sync.Map // map[int64][]Node, cached orphans to be deleted
+	cacheOrphansCancel context.CancelFunc // to notify the load work canceled
 }
 
 func newNodeDB(db dbm.DB, cacheSize int, opts Options, lg log.Logger) *nodeDB {
@@ -331,6 +337,24 @@ func (ndb *nodeDB) Has(nk []byte) (bool, error) {
 	return ndb.db.Has(ndb.nodeKey(nk))
 }
 
+func (ndb *nodeDB) loadOrphans(version int64) error {
+	if _, ok := ndb.cachedOrphans.Load(version); ok {
+		return nil
+	}
+
+	orphans := make([]Node, 0)
+	if err := ndb.traverseOrphans(version, version+1, func(orphan *Node) error {
+		orphans = append(orphans, *orphan)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// store the orphans to cache only when all orphans are found.
+	ndb.cachedOrphans.Store(version, orphans);
+	return nil
+}
+
 // deleteVersion deletes a tree version from disk.
 // deletes orphans
 func (ndb *nodeDB) deleteVersion(version int64) error {
@@ -339,7 +363,18 @@ func (ndb *nodeDB) deleteVersion(version int64) error {
 		return err
 	}
 
-	if err := ndb.traverseOrphans(version, version+1, func(orphan *Node) error {
+	count := 0
+	orphans, ok := ndb.cachedOrphans.Load(version)
+	if !ok || orphans == nil {
+		if err := ndb.loadOrphans(version); err != nil {
+			return err
+		}
+		orphans, _ = ndb.cachedOrphans.Load(version)
+	}
+	ndb.cachedOrphans.Delete(version)
+
+	for _, orphan := range orphans.([]Node) {
+		count++
 		if orphan.nodeKey.nonce == 0 && !orphan.isLegacy {
 			// if the orphan is a reformatted root, it can be a legacy root
 			// so it should be removed from the pruning process.
@@ -355,11 +390,13 @@ func (ndb *nodeDB) deleteVersion(version int64) error {
 		}
 		nk := orphan.GetKey()
 		if orphan.isLegacy {
-			return ndb.batch.Delete(ndb.legacyNodeKey(nk))
+			if err := ndb.batch.Delete(ndb.legacyNodeKey(nk)); err != nil {
+				return err
+			}
 		}
-		return ndb.batch.Delete(ndb.nodeKey(nk))
-	}); err != nil {
-		return err
+		if err := ndb.batch.Delete(ndb.nodeKey(nk)); err != nil {
+			return err
+		}
 	}
 
 	literalRootKey := GetRootKey(version)
@@ -574,6 +611,11 @@ func (ndb *nodeDB) DeleteVersionsTo(toVersion int64) error {
 		first = legacyLatestVersion + 1
 	}
 
+	// notify stop the loading works
+	if ndb.cacheOrphansCancel != nil {
+		ndb.cacheOrphansCancel()
+	}
+
 	for version := first; version <= toVersion; version++ {
 		if err := ndb.deleteVersion(version); err != nil {
 			return err
@@ -581,7 +623,37 @@ func (ndb *nodeDB) DeleteVersionsTo(toVersion int64) error {
 		ndb.resetFirstVersion(version + 1)
 	}
 
+	if toVersion-first > maxCachedOrphans {
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if ndb.cacheOrphansCancel != nil {
+		ndb.cacheOrphansCancel()
+	}
+	ndb.cacheOrphansCancel = cancel
+	// clear the cached orphans
+	ndb.cachedOrphans = sync.Map{}
+
+	// predict next deletion, load node in background
+	nstart := toVersion
+	nend := nstart + toVersion - first
+
+	go ndb.loadOrphansRange(ctx, nstart, nend)
+
 	return nil
+}
+
+func (ndb *nodeDB) loadOrphansRange(ctx context.Context, fromVersion, toVersion int64) {
+	for version := fromVersion; version <= toVersion; version++ {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			time.Sleep(10 * time.Millisecond)
+			ndb.loadOrphans(version)
+		}
+	}
 }
 
 func (ndb *nodeDB) DeleteFastNode(key []byte) error {
