@@ -98,10 +98,15 @@ type (
 	}
 )
 
-func newNodeDB(db dbm.DB, cacheSize int, opts *Options, moniker string) *nodeDB {
+func newNodeDB(db dbm.DB, cacheSize int, opts *Options, moniker ...string) *nodeDB {
 	if opts == nil {
 		o := DefaultOptions()
 		opts = &o
+	}
+
+	name := ""
+	if len(moniker) > 0 {
+		name = moniker[0]
 	}
 
 	storeVersion, err := db.Get(metadataKeyFormat.Key(ibytes.UnsafeStrToBytes(storageVersionKey)))
@@ -120,7 +125,7 @@ func newNodeDB(db dbm.DB, cacheSize int, opts *Options, moniker string) *nodeDB 
 		versionReaders: make(map[int64]uint32, 8),
 		storageVersion: string(storeVersion),
 
-		moniker: moniker,
+		moniker: name,
 	}
 }
 
