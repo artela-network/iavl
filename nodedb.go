@@ -560,35 +560,35 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 		ndb.cacheOrphansCancel()
 	}
 
-	miss := 0
-	hit := 0
-	hitKeysCount := 0
-	missKeysCount := 0
+	var (
+		miss          = 0
+		hit           = 0
+		hitKeysCount  = 0
+		missKeysCount = 0
 
-	t1 := time.Now()
-	totalOrphans := 0
-	totalDelete := int64(0)
+		t1           = time.Now()
+		totalOrphans = 0
+		totalDelete  = int64(0)
+	)
 	// If the predecessor is earlier than the beginning of the lifetime, we can delete the orphan.
 	// Otherwise, we shorten its lifetime, by moving its endpoint to the predecessor version.
 	for version := fromVersion; version < toVersion; version++ {
-		orphans, ok := ndb.cachedOrphans.Load(version)
+		var orphans []keyHashPair
+		orphansAny, ok := ndb.cachedOrphans.Load(version)
 		if !ok {
-			if err := ndb.loadOrphans(version); err != nil {
+			if orphans, err = ndb.loadOrphans(version); err != nil {
 				return err
 			}
-			orphans, ok = ndb.cachedOrphans.Load(version)
-			if !ok {
-				return fmt.Errorf("failed to load orphans for version %d", version)
-			}
 			miss++
-			missKeysCount += len(orphans.([]keyHashPair))
+			missKeysCount += len(orphans)
 		} else {
+			orphans = orphansAny.([]keyHashPair)
 			hit++
-			hitKeysCount += len(orphans.([]keyHashPair))
+			hitKeysCount += len(orphans)
 		}
 
-		totalOrphans += len(orphans.([]keyHashPair))
-		for _, pair := range orphans.([]keyHashPair) {
+		totalOrphans += len(orphans)
+		for _, pair := range orphans {
 			var from, to int64
 			t1d := time.Now()
 			orphanKeyFormat.Scan(pair.key, &to, &from)
@@ -642,7 +642,14 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 	}
 	ndb.cacheOrphansCancel = cancel
 	// clear the cached orphans
-	ndb.cachedOrphans = sync.Map{}
+	keys := make([]any, 0)
+	ndb.cachedOrphans.Range(func(key, _ interface{}) bool {
+		keys = append(keys, key)
+		return true
+	})
+	for _, key := range keys {
+		ndb.cachedOrphans.Delete(key)
+	}
 
 	// predict next deletion, load node in background
 	nstart := toVersion
@@ -669,7 +676,13 @@ func (ndb *nodeDB) loadOrphansRange(ctx context.Context, fromVersion, toVersion 
 			return
 		default:
 			time.Sleep(10 * time.Millisecond)
-			ndb.loadOrphans(version)
+			orphans, err := ndb.loadOrphans(version)
+			if err != nil {
+				// this will be loaded again in sync
+				logger.Debug(fmt.Sprintf("loadOrphansRange %s version %d, error %v\n", ndb.moniker, version, err))
+				return
+			}
+			ndb.cachedOrphans.Store(version, orphans)
 		}
 	}
 }
@@ -757,9 +770,9 @@ func (ndb *nodeDB) saveOrphan(hash []byte, fromVersion, toVersion int64) error {
 	return nil
 }
 
-func (ndb *nodeDB) loadOrphans(version int64) error {
-	if _, ok := ndb.cachedOrphans.Load(version); ok {
-		return nil
+func (ndb *nodeDB) loadOrphans(version int64) ([]keyHashPair, error) {
+	if orphans, ok := ndb.cachedOrphans.Load(version); ok {
+		return orphans.([]keyHashPair), nil
 	}
 
 	orphans := make([]keyHashPair, 0)
@@ -767,12 +780,11 @@ func (ndb *nodeDB) loadOrphans(version int64) error {
 		orphans = append(orphans, keyHashPair{key, hash})
 		return nil
 	}); err != nil {
-		return err
+		return nil, err
 	}
 
-	// store the orphans to cache only when all orphans are found.
-	ndb.cachedOrphans.Store(version, orphans)
-	return nil
+	// return the orphans only when all orphans are found.
+	return orphans, nil
 }
 
 // deleteOrphans deletes orphaned nodes from disk, and the associated orphan
@@ -784,18 +796,17 @@ func (ndb *nodeDB) deleteOrphans(version int64) error {
 		return err
 	}
 
-	orphans, ok := ndb.cachedOrphans.Load(version)
+	var orphans []keyHashPair
+	orphansAny, ok := ndb.cachedOrphans.Load(version)
 	if !ok {
-		if err := ndb.loadOrphans(version); err != nil {
+		if orphans, err = ndb.loadOrphans(version); err != nil {
 			return err
 		}
-		orphans, ok = ndb.cachedOrphans.Load(version)
-		if !ok {
-			return fmt.Errorf("failed to load orphans for version %d", version)
-		}
+	} else {
+		orphans = orphansAny.([]keyHashPair)
 	}
 
-	for _, pair := range orphans.([]keyHashPair) {
+	for _, pair := range orphans {
 		var fromVersion, toVersion int64
 
 		// See comment on `orphanKeyFmt`. Note that here, `version` and
