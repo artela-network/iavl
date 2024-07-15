@@ -642,10 +642,14 @@ func (ndb *nodeDB) DeleteVersionsRange(fromVersion, toVersion int64) error {
 	}
 	ndb.cacheOrphansCancel = cancel
 	// clear the cached orphans
-	ndb.cachedOrphans.Range(func(key, value interface{}) bool {
-		ndb.cachedOrphans.Delete(key)
+	keys := make([]any, 0)
+	ndb.cachedOrphans.Range(func(key, _ interface{}) bool {
+		keys = append(keys, key)
 		return true
 	})
+	for _, key := range keys {
+		ndb.cachedOrphans.Delete(key)
+	}
 
 	// predict next deletion, load node in background
 	nstart := toVersion
